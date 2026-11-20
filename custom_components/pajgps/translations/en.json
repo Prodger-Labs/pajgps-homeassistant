@@ -40,5 +40,29 @@
         "title": "PAJ GPS Configuration"
       }
     }
+  },
+  "services": {
+    "get_track": {
+      "name": "Get track",
+      "description": "Returns every stored point for a tracker between two times, oldest first. The window can be at most 24 hours and the answer at most 5000 points. Speed is in km/h. Use it with a response variable.",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "Start of the trip. ISO 8601 with an offset, or without one for Home Assistant's local time."
+        },
+        "end": {
+          "name": "End",
+          "description": "End of the trip, same format as start. Must be after start and at most 24 hours later."
+        },
+        "device_id": {
+          "name": "Device ID",
+          "description": "PAJ device id. Optional when the account has exactly one device."
+        },
+        "include_wifi": {
+          "name": "Include Wi-Fi points",
+          "description": "Also ask PAJ for points located by Wi-Fi. Points without coordinates are dropped."
+        }
+      }
+    }
   }
 }
