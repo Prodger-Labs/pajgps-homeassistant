@@ -13,6 +13,31 @@
 >
 > This repository is now obosolete!
 
+## The `patched` branch (Prodger-Labs fork)
+
+This fork keeps its changes on `patched`, which is the default branch. `main` stays upstream plus one requirements commit.
+
+What is different from upstream:
+- The availability check follows redirects on HEAD (`allow_redirects=True`).
+- `device_tracker` exposes `fix_time` (the API's own `dateunix`, ISO 8601 UTC) and `position_source`.
+- History fallback. The last-position endpoint can serve a stale record for tens of minutes. When the record is over 90 s old, the integration asks `GET /api/v1/trackerdata/{id}/last_points?lastPoints=2&gps=1&wifi=0` (at most once a minute per device, once every 5 minutes after 10 fruitless tries) and uses the newest point if it is newer. `position_source` is `history` or `last_position`. The poll interval is unchanged at 30 s. The logic lives in `custom_components/pajgps/history.py` and has no Home Assistant imports.
+
+Tests (no network, no credentials):
+
+    python3 custom_components/pajgps/tests/test_history.py
+    python3 custom_components/pajgps/tests/test_history_glue.py
+
+A weekly workflow (`upstream-check.yml`) compares upstream `main` with the SHA in `UPSTREAM_BASE` and opens one issue, "Upstream moved: rebase patched", when upstream is ahead.
+
+To rebase:
+1. `git fetch upstream`
+2. `git rebase upstream/main` on `patched` (or cherry-pick the patched commits onto a new branch from it)
+3. Run both test files
+4. Put the new upstream SHA in `UPSTREAM_BASE` and push `patched` to this fork
+5. Close the issue
+
+Never push to, or open a pull request or issue on, `skipperro/pajgps-homeassistant`. Nothing goes back upstream. Set the push URL of the `upstream` remote to `DISABLED` to make that physical.
+
 ## Introduction
 Welcome to the PAJ GPS Tracker Integration for Home Assistant!<br>
 This integration enables you to effortlessly incorporate PAJ GPS devices from www.paj-gps.de into your Home Assistant setup.

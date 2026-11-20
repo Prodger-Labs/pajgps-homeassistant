@@ -1,0 +1,29 @@
+---
+# Weekly check: has upstream main moved past the commit `patched` is based on?
+# runs-on is GitHub-hosted on purpose. This repo is public, and self-hosted
+# runners must not run public repos.
+name: Upstream check
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare upstream main with UPSTREAM_BASE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./.github/scripts/upstream-check.sh
