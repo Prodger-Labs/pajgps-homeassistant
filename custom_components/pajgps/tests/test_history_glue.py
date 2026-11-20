@@ -35,7 +35,12 @@ try:
 except ImportError:
     _stub("homeassistant")
     _stub("homeassistant.config_entries")
-    _stub("homeassistant.core", HomeAssistant=object)
+    _stub("homeassistant.core", HomeAssistant=object, ServiceCall=object,
+          SupportsResponse=types.SimpleNamespace(ONLY="only"))
+    _stub("homeassistant.exceptions", HomeAssistantError=type("HomeAssistantError", (Exception,), {}))
+    _stub("homeassistant.util")
+    _stub("homeassistant.util.dt")
+    _stub("voluptuous", Schema=lambda s: s, Required=lambda k: k, Optional=lambda k, default=None: k)
     _stub("homeassistant.const", Platform=types.SimpleNamespace(
         DEVICE_TRACKER="device_tracker", SENSOR="sensor", BINARY_SENSOR="binary_sensor", SWITCH="switch"))
     _stub("homeassistant.components")
@@ -43,6 +48,11 @@ except ImportError:
     _stub("homeassistant.components.device_tracker.config_entry", TrackerEntity=_TrackerEntity)
     _stub("homeassistant.helpers")
     _stub("homeassistant.helpers.entity", DeviceInfo=dict)
+    _stub("homeassistant.helpers.config_validation", string=str, boolean=bool, positive_int=int)
+    sys.modules["homeassistant.exceptions"].ServiceValidationError = type(
+        "ServiceValidationError", (sys.modules["homeassistant.exceptions"].HomeAssistantError,), {})
+    sys.modules["homeassistant.helpers"].config_validation = sys.modules["homeassistant.helpers.config_validation"]
+    sys.modules["homeassistant.util"].dt = sys.modules["homeassistant.util.dt"]
     sys.modules["homeassistant"].config_entries = sys.modules["homeassistant.config_entries"]
     sys.modules["homeassistant"].core = sys.modules["homeassistant.core"]
 

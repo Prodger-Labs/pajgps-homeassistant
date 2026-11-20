@@ -26,6 +26,31 @@ Tests (no network, no credentials):
 
     python3 custom_components/pajgps/tests/test_history.py
     python3 custom_components/pajgps/tests/test_history_glue.py
+    python3 custom_components/pajgps/tests/test_track.py
+    python3 custom_components/pajgps/tests/test_track_service.py
+
+### Services
+
+`pajgps.get_track` returns every point the PAJ cloud holds for a tracker between two times, oldest first. Use it after a trip to work out distance and hours from the true track instead of the latest point. It returns a response, so call it with `response_variable`:
+
+```yaml
+action: pajgps.get_track
+data:
+  device_id: 1242185
+  start: "2026-11-19 09:00:00"
+  end: "2026-11-19 11:10:00"
+response_variable: trip
+```
+
+`start` and `end` take ISO 8601. With an offset (`2026-11-19T09:00:00+00:00`) they are used as written. Without one they are Home Assistant's local time. `device_id` is optional when the account has one tracker. `include_wifi` (default false) also asks PAJ for Wi-Fi located points.
+
+The response has `device_id`, `start`, `end` (ISO 8601 UTC), `count`, `truncated`, `dropped` and `points`. Each point is `t` (ISO 8601 UTC), `lat`, `lon`, `speed_kmh`, `battery` and `accuracy`. Points are sorted by time and de-duplicated. Points without usable coordinates or time are skipped.
+
+Limits:
+- The window is at most 24 hours. A longer one raises an error.
+- At most 5000 points come back. If there are more, the earliest 5000 are kept, `truncated` is true and `dropped` says how many valid points were cut.
+- `speed_kmh` is in km/h, as PAJ reports it.
+- One request, 20 s timeout, no retries. A failed call raises an error with no URL or token in it.
 
 A weekly workflow (`upstream-check.yml`) compares upstream `main` with the SHA in `UPSTREAM_BASE` and opens one issue, "Upstream moved: rebase patched", when upstream is ahead.
 

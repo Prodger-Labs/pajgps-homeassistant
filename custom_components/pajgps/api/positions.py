@@ -3,6 +3,7 @@ Low-level position and elevation data fetching from the PajGPS and Open-Meteo AP
 
 Responsible for:
 - Fetching last known positions for all devices
+- Fetching a device's track between two timestamps (get_track service)
 - Fetching elevation data from the Open-Meteo API for a given coordinate
 - Detecting which devices have moved since the last update
 """
@@ -81,6 +82,24 @@ async def fetch_history_body(device_id: int, headers: dict):
     return await make_request(
         "GET", url, headers, params=history.HISTORY_QUERY, timeout=5, max_attempts=1
     )
+
+
+async def fetch_track_body(
+    device_id: int, date_start: int, date_end: int, headers: dict, gps: int = 1, wifi: int = 0
+):
+    """
+    Fetch every stored point for a device between two unix timestamps (seconds, UTC).
+
+    Returns the parsed JSON body. Raises on any error: the caller (the get_track
+    service) owns the error handling. A single attempt with a 20 s timeout, as a
+    window of a few hours holds a few hundred points.
+
+    Corresponding CURL command:
+    curl 'https://connect.paj-gps.de/api/v1/trackerdata/<id>/date_range?dateStart=<s>&dateEnd=<s>&gps=1&wifi=0'
+    """
+    url = API_URL + f"trackerdata/{device_id}/date_range"
+    params = {"dateStart": date_start, "dateEnd": date_end, "gps": gps, "wifi": wifi}
+    return await make_request("GET", url, headers, params=params, timeout=20, max_attempts=1)
 
 
 async def fetch_elevation(device_id: int, position: PajGPSPositionData) -> float | None:

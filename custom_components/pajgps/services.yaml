@@ -1,0 +1,24 @@
+get_track:
+  fields:
+    start:
+      required: true
+      example: "2026-11-19 09:00:00"
+      selector:
+        datetime:
+    end:
+      required: true
+      example: "2026-11-19 11:10:00"
+      selector:
+        datetime:
+    device_id:
+      required: false
+      example: 1242185
+      selector:
+        number:
+          min: 1
+          mode: box
+    include_wifi:
+      required: false
+      default: false
+      selector:
+        boolean:
