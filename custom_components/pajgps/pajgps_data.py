@@ -13,7 +13,7 @@ from datetime import timedelta
 import aiohttp
 from custom_components.pajgps.const import DOMAIN, VERSION
 from custom_components.pajgps.api import auth, devices, alerts, sensors, positions
-from custom_components.pajgps import models, requests
+from custom_components.pajgps import history, models, requests
 
 MIN_ELEVATION_UPDATE_DELAY = 60 * 5 # Minimum delay between elevation updates for the same device in seconds (5 minutes)
 _LOGGER = logging.getLogger(__name__)
@@ -60,6 +60,9 @@ class PajGPSData:
     positions: list[models.PajGPSPositionData]
     sensors: list[models.PajGPSSensorData]
 
+    # Per-device history-fallback bookkeeping (attempt spacing, backoff, warn limiter)
+    history_states: dict[int, history.DeviceHistoryState]
+
 
     def __init__(self, guid: str, entry_name: str, email: str, password: str, mark_alerts_as_read: bool, fetch_elevation: bool, force_battery: bool) -> None:
         """
@@ -80,6 +83,7 @@ class PajGPSData:
         self.alerts = []
         self.positions = []
         self.sensors = []
+        self.history_states = {}
         self.token = None
         self.last_token_update = 0.0
         self.last_update = time.time() - 60
@@ -266,6 +270,8 @@ class PajGPSData:
 
         self.positions_json = raw_json
 
+        new_positions = await self._apply_history(new_positions)
+
         if self.fetch_elevation:
             moved_ids = positions.find_moved_device_ids(new_positions, self.positions)
             for device_id in moved_ids:
@@ -282,6 +288,42 @@ class PajGPSData:
                 task.add_done_callback(self._background_tasks.discard)
 
         self.positions = new_positions
+
+    async def _apply_history(
+        self, new_positions: list[models.PajGPSPositionData]
+    ) -> list[models.PajGPSPositionData]:
+        """
+        Replace a stale last-position record with a newer history point.
+
+        Never raises: on any problem the last-position records are returned unchanged.
+        """
+        headers = self.get_standard_headers()
+
+        async def fetch(device_id: int):
+            return await positions.fetch_history_body(device_id, headers)
+
+        async def resolve(pos: models.PajGPSPositionData) -> models.PajGPSPositionData:
+            try:
+                state = self.history_states.setdefault(pos.device_id, history.DeviceHistoryState())
+                result = await history.resolve_history(state, pos.device_id, pos.fix_time, fetch, time.time())
+                if result.source != history.SOURCE_HISTORY or result.point is None:
+                    return pos
+                pt = result.point
+                return models.PajGPSPositionData(
+                    pos.device_id,
+                    pt.lat,
+                    pt.lng,
+                    pos.direction,
+                    pt.speed if pt.speed is not None else pos.speed,
+                    pt.battery_level if pt.battery_level is not None else pos.battery_level,
+                    fix_time=pt.dateunix,
+                    position_source=history.SOURCE_HISTORY,
+                )
+            except Exception as err:  # noqa: BLE001 - history must never break the normal path
+                _LOGGER.debug("History fallback failed for device %s: %s", pos.device_id, err)
+                return pos
+
+        return list(await asyncio.gather(*(resolve(p) for p in new_positions)))
 
     async def _update_elevation_for(self, device_id: int, position: models.PajGPSPositionData) -> None:
         """Fetch elevation for a single position and store the result."""

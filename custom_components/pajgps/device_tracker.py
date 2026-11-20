@@ -29,6 +29,7 @@ class PajGPSPositionSensor(TrackerEntity):
     _longitude: float | None = None
     _latitude: float | None = None
     _fix_time: int | None = None
+    _position_source: str | None = None
 
     def __init__(self, pajgps_data: PajGPSData, device_id: int) -> None:
         """Initialize the sensor."""
@@ -74,16 +75,20 @@ class PajGPSPositionSensor(TrackerEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, str] | None:
-        """Return the device's own fix time, so a consumer can tell a fresh
-        position from a stale one replaying the last known coordinates --
-        neither is otherwise distinguishable anywhere in Home Assistant."""
-        if self._fix_time is None:
-            return None
-        return {
-            "fix_time": datetime.fromtimestamp(
+        """Return the device's own fix time and where the position came from.
+
+        fix_time lets a consumer tell a fresh position from a stale one replaying
+        the last known coordinates. position_source is "history" when the
+        last-position endpoint was stale and a newer history point was used.
+        """
+        attrs: dict[str, str] = {}
+        if self._fix_time is not None:
+            attrs["fix_time"] = datetime.fromtimestamp(
                 self._fix_time, tz=timezone.utc
             ).isoformat()
-        }
+        if self._position_source is not None:
+            attrs["position_source"] = self._position_source
+        return attrs or None
 
     async def async_update(self) -> None:
         """Update the GPS sensor data."""
@@ -91,6 +96,7 @@ class PajGPSPositionSensor(TrackerEntity):
         position_data = self._pajgps_data.get_position(self._device_id)
         if position_data is not None:
             self._fix_time = position_data.fix_time
+            self._position_source = position_data.position_source
             if position_data.lat is not None and position_data.lng is not None:
                 self._latitude = position_data.lat
                 self._longitude = position_data.lng
@@ -99,6 +105,7 @@ class PajGPSPositionSensor(TrackerEntity):
                 self._longitude = None
         else:
             self._fix_time = None
+            self._position_source = None
             self._latitude = None
             self._longitude = None
 

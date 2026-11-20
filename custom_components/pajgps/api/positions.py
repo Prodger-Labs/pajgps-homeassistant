@@ -10,6 +10,7 @@ import logging
 
 from custom_components.pajgps.requests import make_request, ApiResponseError
 from custom_components.pajgps.models import PajGPSPositionData
+from custom_components.pajgps import history
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,12 +56,31 @@ async def fetch_positions(device_ids: list[int], headers: dict) -> tuple[list[Pa
             device["lng"],
             device["direction"],
             device["speed"],
-            device["battery_level"],
-            fix_time=device.get("dateunix"),
+            # Upstream 0.7.1 reads "battery_level"; the example JSON and 0.7.0 use "battery".
+            # Accept either so a key change on the API side cannot break the poll.
+            device.get("battery_level", device.get("battery")),
+            fix_time=history.valid_dateunix(device.get("dateunix")),
         )
         for device in raw_json["success"]
     ]
     return positions, raw_json
+
+
+async def fetch_history_body(device_id: int, headers: dict):
+    """
+    Fetch the two newest GPS points for a device from the history endpoint.
+
+    Returns the parsed JSON body. Raises on any error: the caller
+    (history.resolve_history) owns the error handling. A single attempt with a
+    5 s timeout, so a dead history call cannot hold up the 30 s poll.
+
+    Corresponding CURL command:
+    curl 'https://connect.paj-gps.de/api/v1/trackerdata/<id>/last_points?lastPoints=2&gps=1&wifi=0'
+    """
+    url = API_URL + f"trackerdata/{device_id}/last_points"
+    return await make_request(
+        "GET", url, headers, params=history.HISTORY_QUERY, timeout=5, max_attempts=1
+    )
 
 
 async def fetch_elevation(device_id: int, position: PajGPSPositionData) -> float | None:

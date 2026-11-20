@@ -88,6 +88,7 @@ class PajGPSPositionData:
     battery_level: int
     last_elevation_update: float = 0.0
     fix_time: int | None = None
+    position_source: str = "last_position"  # "last_position" or "history"
 
     def __init__(
         self,
@@ -98,6 +99,7 @@ class PajGPSPositionData:
         speed: int,
         battery_level: int,
         fix_time: int | None = None,
+        position_source: str = "last_position",
     ) -> None:
         """Initialize the PajGPSPositionData class."""
         self.device_id = device_id
@@ -112,6 +114,9 @@ class PajGPSPositionData:
         # callers/tests that don't pass it still get a working object, they
         # just don't get staleness info.
         self.fix_time = fix_time
+        # Where lat/lng came from: the last-position endpoint or the history
+        # endpoint (used when the former serves a stale record).
+        self.position_source = position_source
 
 
 class PajGPSSensorData:
