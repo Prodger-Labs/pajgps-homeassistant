@@ -15,7 +15,7 @@
 
 ## The `patched` branch (Prodger-Labs fork)
 
-This fork keeps its changes on `patched`, which is the default branch. `main` stays upstream plus one requirements commit.
+This fork keeps its changes on `patched`, which is the default branch. `main` is left as it was when this fork was made (upstream plus one requirements commit).
 
 What is different from upstream:
 - The availability check follows redirects on HEAD (`allow_redirects=True`).
@@ -52,14 +52,7 @@ Limits:
 - `speed_kmh` is in km/h, as PAJ reports it.
 - One request, 20 s timeout, no retries. A failed call raises an error with no URL or token in it.
 
-A weekly workflow (`upstream-check.yml`) compares upstream `main` with the SHA in `UPSTREAM_BASE` and opens one issue, "Upstream moved: rebase patched", when upstream is ahead.
-
-To rebase:
-1. `git fetch upstream`
-2. `git rebase upstream/main` on `patched` (or cherry-pick the patched commits onto a new branch from it)
-3. Run both test files
-4. Put the new upstream SHA in `UPSTREAM_BASE` and push `patched` to this fork
-5. Close the issue
+Nothing tracks upstream. Skipperro's repo is obsolete (its README says the integration moved into Home Assistant Core) and last changed on 4 June 2026, so this fork is maintained here and no check, ticket or reminder watches it. If upstream ever changes in a way that matters, bring it in by hand: `git fetch upstream` and merge or cherry-pick into `patched`, then run the test files under `custom_components/pajgps/tests/`.
 
 Never push to, or open a pull request or issue on, `skipperro/pajgps-homeassistant`. Nothing goes back upstream. Set the push URL of the `upstream` remote to `DISABLED` to make that physical.
 
