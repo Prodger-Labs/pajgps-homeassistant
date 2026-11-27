@@ -21,6 +21,7 @@ What is different from upstream:
 - The availability check follows redirects on HEAD (`allow_redirects=True`).
 - `device_tracker` exposes `fix_time` (the API's own `dateunix`, ISO 8601 UTC) and `position_source`.
 - History fallback. The last-position endpoint can serve a stale record for tens of minutes. When the record is over 90 s old, the integration asks `GET /api/v1/trackerdata/{id}/last_points?lastPoints=2&gps=1&wifi=0` (at most once a minute per device, once every 5 minutes after 10 fruitless tries) and uses the newest point if it is newer. `position_source` is `history` or `last_position`. The poll interval is unchanged at 30 s. The logic lives in `custom_components/pajgps/history.py` and has no Home Assistant imports.
+- Slow PAJ or Open-Meteo never holds up Home Assistant. An entity poll no longer queues on the shared update lock and returns within 7 s even if the PAJ availability check hangs (the refresh carries on in the background and the entities keep their last data until the next poll). Elevation lookups are a background task with one 5 s attempt and a 6 s hard cap, the last good elevation is kept between polls, and failures back off from 5 minutes to an hour with one warning per device per 15 minutes. The elevation logic lives in `custom_components/pajgps/elevation.py` and has no Home Assistant imports. Setup and the options flow still wait for a full refresh.
 
 Tests (no network, no credentials):
 
@@ -28,6 +29,8 @@ Tests (no network, no credentials):
     python3 custom_components/pajgps/tests/test_history_glue.py
     python3 custom_components/pajgps/tests/test_track.py
     python3 custom_components/pajgps/tests/test_track_service.py
+    python3 custom_components/pajgps/tests/test_elevation.py
+    python3 custom_components/pajgps/tests/test_update_budget_glue.py
 
 ### Services
 
