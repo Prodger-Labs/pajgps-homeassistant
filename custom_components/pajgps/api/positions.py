@@ -9,9 +9,11 @@ Responsible for:
 """
 import logging
 
+import aiohttp
+
 from custom_components.pajgps.requests import make_request, ApiResponseError
 from custom_components.pajgps.models import PajGPSPositionData
-from custom_components.pajgps import history
+from custom_components.pajgps import elevation, history
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,7 +109,9 @@ async def fetch_elevation(device_id: int, position: PajGPSPositionData) -> float
     Fetch the elevation (in metres) for the given position from the Open-Meteo API.
 
     Rounds lat/lng to ~100 m precision before the request to improve cache hit rate.
-    Returns None on any error.
+    One attempt with a short timeout and no retries: elevation is optional, and the
+    caller (PajGPSData._update_elevation_for) owns the retry timing and the logging.
+    Returns None on any error, and logs it at debug level only.
 
     Example request:
     https://api.open-meteo.com/v1/elevation?latitude=52.52&longitude=13.41
@@ -118,19 +122,17 @@ async def fetch_elevation(device_id: int, position: PajGPSPositionData) -> float
     params = {"latitude": lat, "longitude": lng}
     headers = {"accept": "application/json"}
 
-    raw_json = None
     try:
-        raw_json = await make_request("GET", ELEVATION_API_URL, headers, params=params)
-    except TimeoutError:
-        _LOGGER.warning(
-            "Timeout while getting elevation data for device %s at (%s, %s)",
-            device_id, lat, lng,
+        raw_json = await make_request(
+            "GET", ELEVATION_API_URL, headers, params=params,
+            timeout=elevation.REQUEST_TIMEOUT_S, max_attempts=1,
         )
-        return None
-    except ValueError as e:
-        _LOGGER.warning(
-            "Failed to get elevation for device %s at (%s, %s): %s",
-            device_id, lat, lng, e,
+    except (TimeoutError, ValueError, ApiResponseError, aiohttp.ClientError) as e:
+        # Open-Meteo answers 502 or {"error": true, "reason": "The service is overloaded"}
+        # now and then. Both are expected, not a bug.
+        _LOGGER.debug(
+            "Failed to get elevation for device %s at (%s, %s): %s: %s",
+            device_id, lat, lng, type(e).__name__, e,
         )
         return None
     except Exception as e:
@@ -140,8 +142,10 @@ async def fetch_elevation(device_id: int, position: PajGPSPositionData) -> float
         )
         return None
 
-    if raw_json and "elevation" in raw_json:
-        return raw_json["elevation"][0]
+    if isinstance(raw_json, dict) and isinstance(raw_json.get("elevation"), list) and raw_json["elevation"]:
+        value = raw_json["elevation"][0]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
 
     _LOGGER.warning(
         "Unexpected elevation response format for device %s at (%s, %s): %s",

@@ -13,9 +13,13 @@ from datetime import timedelta
 import aiohttp
 from custom_components.pajgps.const import DOMAIN, VERSION
 from custom_components.pajgps.api import auth, devices, alerts, sensors, positions
-from custom_components.pajgps import history, models, requests
+from custom_components.pajgps import elevation, history, models, requests
 
-MIN_ELEVATION_UPDATE_DELAY = 60 * 5 # Minimum delay between elevation updates for the same device in seconds (5 minutes)
+# An entity update (random start delay of up to 1 s, then this) must finish well inside
+# Home Assistant's 10 s "update is taking over 10 seconds" warning. If PAJ is slower than
+# this the refresh carries on in the background and the entities keep their last data.
+UPDATE_WAIT_BUDGET_S = 7
+CLOSE_WAIT_S = 5  # how long async_close lets background tasks finish before cancelling them
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
 API_URL = "https://connect.paj-gps.de/api/v1/"
@@ -63,6 +67,9 @@ class PajGPSData:
     # Per-device history-fallback bookkeeping (attempt spacing, backoff, warn limiter)
     history_states: dict[int, history.DeviceHistoryState]
 
+    # Per-device elevation cache and retry state (last good value, back-off, warn limiter)
+    elevation_states: dict[int, elevation.DeviceElevationState]
+
 
     def __init__(self, guid: str, entry_name: str, email: str, password: str, mark_alerts_as_read: bool, fetch_elevation: bool, force_battery: bool) -> None:
         """
@@ -84,6 +91,7 @@ class PajGPSData:
         self.positions = []
         self.sensors = []
         self.history_states = {}
+        self.elevation_states = {}
         self.token = None
         self.last_token_update = 0.0
         self.last_update = time.time() - 60
@@ -92,10 +100,15 @@ class PajGPSData:
 
     async def async_close(self) -> None:
         """Close the session and cleanup resources."""
-        # Wait for any pending background tasks
+        # Give pending background tasks a moment to finish, then cancel what is left
+        # (a refresh stuck on a hung PAJ call must not hold up unloading the entry)
         if self._background_tasks:
-            _LOGGER.debug("Waiting for %s background tasks to complete", len(self._background_tasks))
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            tasks = set(self._background_tasks)
+            _LOGGER.debug("Waiting for %s background tasks to complete", len(tasks))
+            _, pending = await asyncio.wait(tasks, timeout=CLOSE_WAIT_S)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             self._background_tasks.clear()
 
         # Close the session
@@ -150,8 +163,39 @@ class PajGPSData:
         """
         Orchestrate a full data refresh.
         Skips if data is still fresh or an update is already in progress.
+
+        Entity polls (forced=False) never wait for the shared update lock and never wait
+        longer than UPDATE_WAIT_BUDGET_S: if PAJ is slow the refresh carries on in the
+        background and the entity keeps its last data until the next poll. Forced updates
+        (setup, options flow) wait for the full refresh.
         """
         if not await self._should_run_update(forced):
+            return
+
+        if forced:
+            await self._locked_update(forced)
+            return
+
+        task = asyncio.create_task(self._locked_update(forced))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        done, _ = await asyncio.wait({task}, timeout=UPDATE_WAIT_BUDGET_S)
+        if done:
+            task.result()
+        else:
+            _LOGGER.debug("PAJ refresh still running after %s s, carrying on in the background", UPDATE_WAIT_BUDGET_S)
+            task.add_done_callback(self._log_abandoned_update)
+
+    @staticmethod
+    def _log_abandoned_update(task: asyncio.Task) -> None:
+        """Log how a refresh ended when no entity was left waiting for it."""
+        if not task.cancelled() and (err := task.exception()) is not None:
+            _LOGGER.warning("PAJ refresh failed: %s: %s", type(err).__name__, err)
+
+    async def _locked_update(self, forced: bool) -> None:
+        """Run one refresh under the shared lock. A polling caller gives up if the lock is held."""
+        # No await between this check and taking the lock, so two polls cannot both pass it.
+        if not forced and self.update_lock.locked():
             return
 
         async with self.update_lock:
@@ -272,20 +316,7 @@ class PajGPSData:
 
         new_positions = await self._apply_history(new_positions)
 
-        if self.fetch_elevation:
-            moved_ids = positions.find_moved_device_ids(new_positions, self.positions)
-            for device_id in moved_ids:
-                old = self.get_position(device_id)
-                if old is not None and (time.time() - old.last_elevation_update) <= MIN_ELEVATION_UPDATE_DELAY:
-                    continue
-                new_pos = next((p for p in new_positions if p.device_id == device_id), None)
-                if new_pos is None:
-                    continue
-                if old is not None:
-                    old.last_elevation_update = time.time()
-                task = asyncio.create_task(self._update_elevation_for(device_id, new_pos))
-                self._background_tasks.add(task)
-                task.add_done_callback(self._background_tasks.discard)
+        self._apply_elevation(new_positions)
 
         self.positions = new_positions
 
@@ -325,18 +356,52 @@ class PajGPSData:
 
         return list(await asyncio.gather(*(resolve(p) for p in new_positions)))
 
-    async def _update_elevation_for(self, device_id: int, position: models.PajGPSPositionData) -> None:
-        """Fetch elevation for a single position and store the result."""
-        elevation = await positions.fetch_elevation(device_id, position)
-        if elevation is None:
-            _LOGGER.warning("Failed to fetch elevation for device %s, keeping previous elevation if any", device_id)
+    def _apply_elevation(self, new_positions: list[models.PajGPSPositionData]) -> None:
+        """
+        Carry the last good elevation onto fresh positions and start a background lookup if due.
+
+        Never waits and never touches the update lock: the lookup is its own task with a hard
+        time box, and a failed one just keeps the previous value.
+        """
+        if not self.fetch_elevation:
             return
-        elevation = round(elevation)
+        now = time.time()
+        for position in new_positions:
+            state = self.elevation_states.setdefault(position.device_id, elevation.DeviceElevationState())
+            if state.value is not None:
+                position.elevation = state.value
+            if not elevation.should_fetch(state, position.lat, position.lng, now):
+                continue
+            elevation.mark_started(state, now)
+            task = asyncio.create_task(self._update_elevation_for(position.device_id, position))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+
+    async def _update_elevation_for(self, device_id: int, position: models.PajGPSPositionData) -> None:
+        """Fetch elevation for a single position within a hard time box and store the result."""
+        state = self.elevation_states.setdefault(device_id, elevation.DeviceElevationState())
+        lat, lng = position.lat, position.lng
+        try:
+            value = await asyncio.wait_for(
+                positions.fetch_elevation(device_id, position), timeout=elevation.TOTAL_TIMEOUT_S
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            value = None
+        except asyncio.CancelledError:
+            state.in_flight = False
+            raise
+        if value is None:
+            if elevation.record_failure(state, time.time()):
+                _LOGGER.warning(
+                    "Failed to fetch elevation for device %s, keeping previous elevation if any (%s failures in a row)",
+                    device_id, state.failures,
+                )
+            else:
+                _LOGGER.debug("Failed to fetch elevation for device %s (%s failures in a row)", device_id, state.failures)
+            return
+        elevation.record_success(state, value, lat, lng, time.time())
         live = self.get_position(device_id)
-        target = live if live is not None else position
-        target.elevation = elevation
-        target.lat = round(position.lat, 5)
-        target.lng = round(position.lng, 5)
+        (live if live is not None else position).elevation = state.value
 
 
     async def update_devices_data(self) -> None:
